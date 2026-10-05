@@ -1,0 +1,159 @@
+# Reusable workflow: scan one site, compare with its last production scan, post
+# the result to the repo's "Accessibility status" issue, and keep the results as
+# an artifact for the next comparison. GitHub notifies whoever the comment
+# @mentions (repo or org variable A11Y_MENTIONS), so no mail service is needed.
+# Sites call it from their own workflow (see templates/site-workflow.yml).
+#
+# It runs after a deploy, never inside the build, so a failing scan cannot stop
+# a deploy. The only way it fails is `gate: true` plus a new finding that matches
+# the site's gate, which you would use to block merging a PR, not deploying.
+name: a11y scan
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: Path to the site's a11y config, relative to its repo root.
+        type: string
+        default: a11y.config.json
+      origin:
+        description: Origin to scan. Empty means the config's baseUrl (production).
+        type: string
+        default: ''
+      target:
+        description: production or preview. Only production runs become the next baseline.
+        type: string
+        default: production
+      trigger:
+        description: What started the run (deploy, content, schedule, manual). Shown in the report.
+        type: string
+        default: manual
+      gate:
+        description: Fail the job when a new finding matches the config's gate.
+        type: boolean
+        default: false
+      notify:
+        description: Update the status issue and comment on changes.
+        type: boolean
+        default: true
+      wait-seconds:
+        description: Pause before scanning, e.g. so time-based revalidation picks up a content change.
+        type: number
+        default: 0
+      monitor-ref:
+        description: Version of geletkaplus/a11y-monitor to run.
+        type: string
+        default: v1
+    secrets:
+      VERCEL_AUTOMATION_BYPASS_SECRET:
+        required: false
+      A11Y_MONITOR_READ_TOKEN:
+        description: Read access to geletkaplus/a11y-monitor, needed while that repo is private.
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out site (for its config)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: ${{ inputs.config }}
+          sparse-checkout-cone-mode: false
+
+      - name: Check out a11y-monitor
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: geletkaplus/a11y-monitor
+          ref: ${{ inputs.monitor-ref }}
+          path: .a11y-monitor
+          token: ${{ secrets.A11Y_MONITOR_READ_TOKEN || github.token }}
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: .a11y-monitor/package.json
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: .a11y-monitor/pnpm-lock.yaml
+
+      - name: Install scanner
+        working-directory: .a11y-monitor
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Fetch baseline (last production scan)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ github.workflow }}
+        run: |
+          mkdir -p baseline
+          for id in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WORKFLOW" --status success --limit 30 --json databaseId -q '.[].databaseId'); do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            if gh run download "$id" --repo "$GITHUB_REPOSITORY" -n a11y-results-production -D baseline 2>/dev/null; then
+              echo "Baseline from run $id"; break
+            fi
+          done
+          [ -f baseline/results.json ] || echo "No baseline yet; this run will report everything as new."
+
+      - name: Wait for content to refresh
+        if: inputs.wait-seconds > 0
+        run: sleep ${{ inputs.wait-seconds }}
+
+      - name: Scan
+        env:
+          A11Y_MENTIONS: ${{ vars.A11Y_MENTIONS }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          ORIGIN: ${{ inputs.origin }}
+          TARGET: ${{ inputs.target }}
+          TRIGGER: ${{ inputs.trigger }}
+          CONFIG: ${{ inputs.config }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          args=(scan --config "$CONFIG" --target "$TARGET" --trigger "$TRIGGER" --baseline baseline/results.json --out a11y-report --run-url "$RUN_URL" --quiet)
+          [ -n "$ORIGIN" ] && args+=(--origin "$ORIGIN")
+          ${{ inputs.gate && 'args+=(--gate)' || 'true' }}
+          node .a11y-monitor/src/cli.mjs "${args[@]}" | tee scan.log
+          code=${PIPESTATUS[0]}
+          grep '^\[a11y\]' scan.log >> "$GITHUB_STEP_SUMMARY" || true
+          exit $code
+
+      - name: Post to the Accessibility status issue
+        # always(): a failed gate is exactly when people should hear about it.
+        if: always() && inputs.notify && hashFiles('a11y-report/notify.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          title="Accessibility status"
+          gh label create a11y-status --color 5319e7 --description "Updated by a11y-monitor" 2>/dev/null || true
+          num=$(gh issue list --label a11y-status --state open --limit 1 --json number -q '.[0].number')
+          if [ -z "$num" ]; then
+            num=$(gh issue create --title "$title" --label a11y-status --body-file a11y-report/issue.md | grep -o '[0-9]*$')
+            echo "Created issue #$num"
+          elif [ "$TARGET" = production ]; then
+            # Only production scans describe the live site, so only they rewrite the body.
+            gh issue edit "$num" --body-file a11y-report/issue.md
+          fi
+          if [ "$(jq -r .comment a11y-report/notify.json)" = true ]; then
+            gh issue comment "$num" --body-file a11y-report/comment.md
+          fi
+          echo "Status issue: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$num" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: a11y-results-${{ inputs.target }}
+          path: a11y-report/
+          retention-days: 90
+          if-no-files-found: ignore

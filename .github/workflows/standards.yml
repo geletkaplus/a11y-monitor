@@ -1,0 +1,62 @@
+# Monthly check of the sources that change what we test against: the current
+# WCAG Recommendation, the WCAG 3 draft, and axe-core releases. Runs once for
+# all sites. When something moves it opens an issue here that @mentions the team;
+# the state it compares against is committed back to this repo.
+name: a11y standards watch
+
+on:
+  schedule:
+    - cron: '0 14 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check standards
+        run: node src/cli.mjs standards --state standards-state.json --out standards-report
+
+      - name: Open an issue when something changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          A11Y_MENTIONS: ${{ vars.A11Y_MENTIONS }}
+        run: |
+          changed=$(jq -r '.changed | join(", ")' standards-report/standards.json)
+          behind=$(jq -r '.axeBehind' standards-report/standards.json)
+          if [ -n "$changed" ] || [ "$behind" = "true" ]; then
+            title="Accessibility standards changed: ${changed:-axe-core update}"
+            if ! gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number' | grep -q .; then
+              who=$(echo "$A11Y_MENTIONS" | tr ', ' '\n\n' | sed '/^$/d; s/^@*/@/' | tr '\n' ' ')
+              gh issue create --title "$title" --body-file <(printf '%s\n\n%s\n\n%s\n%s\n%s\n' "$who" \
+                "The monthly standards watch found a change. Full details are in the run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                "- [ ] Read what changed and decide whether our target (WCAG 2.2 AA) moves." \
+                "- [ ] If axe-core has a new release: read its notes, bump the pin in package.json, tag a new release of this repo." \
+                "- [ ] Rerun every site's scan (workflow_dispatch) so new rules show up in the reports.")
+            fi
+          fi
+
+      - name: Save state
+        run: |
+          if [ -n "$(git status --porcelain standards-state.json)" ]; then
+            git config user.name "a11y-monitor"
+            git config user.email "a11y-monitor@users.noreply.github.com"
+            git add standards-state.json
+            git commit -m "Update standards state"
+            git push
+          fi

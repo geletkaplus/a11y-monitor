@@ -1,0 +1,24 @@
+{
+  "name": "@geletkaplus/a11y-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Accessibility scanning and reporting for Geletka+ sites: axe-core + Playwright over a site's sitemap, diffed against the last production run, emailed as a report.",
+  "type": "module",
+  "bin": {
+    "a11y-monitor": "src/cli.mjs"
+  },
+  "scripts": {
+    "scan": "node src/cli.mjs scan",
+    "standards": "node src/cli.mjs standards",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "axe-core": "4.13.0",
+    "playwright": "1.63.0"
+  },
+  "packageManager": "pnpm@12.9.1"
+}

@@ -1,0 +1,24 @@
+{
+  "wcag": {
+    "id": "wcag",
+    "label": "WCAG (latest Recommendation)",
+    "url": "https://www.w3.org/TR/WCAG/",
+    "title": "Web Content Accessibility Guidelines (WCAG) 2.2",
+    "status": "Recommendation",
+    "date": "12 December 2024"
+  },
+  "wcag3": {
+    "id": "wcag3",
+    "label": "WCAG 3 (draft)",
+    "url": "https://www.w3.org/TR/wcag-3.0/",
+    "title": "W3C Accessibility Guidelines (WCAG) 3.0",
+    "status": "Working Draft",
+    "date": "10 September 2026"
+  },
+  "axe": {
+    "id": "axe",
+    "label": "axe-core latest release",
+    "url": "https://github.com/dequelabs/axe-core/releases",
+    "version": "4.14.0"
+  }
+}
