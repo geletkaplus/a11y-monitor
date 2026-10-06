@@ -3,10 +3,10 @@
 Accessibility scanning and reporting for Geletka+ sites.
 
 - **Per site:** after every production deploy, after content is published, and weekly, it scans every page in the sitemap with axe-core (WCAG 2.2 A + AA and best practice) at desktop and mobile widths, checks reflow at 320px and extra h1s, and compares with the last production scan.
-- **Where results go:** an issue titled **Accessibility status** in the site's repo (label `a11y-status`). Every production scan rewrites its body with the current state. When something is new or fixed, the scan adds a comment that @mentions the people in `A11Y_MENTIONS`, and GitHub emails and notifies them. Preview deploys only comment when they introduce or fix something. The full HTML report is attached to each run. No mail service is involved.
+- **Where results go:** an issue titled **Accessibility status** in the site's repo (label `a11y-status`). Every production scan rewrites its body with the current state. When something is new or fixed, the scan adds a comment that @mentions the people in `A11Y_MENTIONS`, and GitHub emails and notifies them. The full HTML report is attached to each run. No mail service is involved.
 - **Once for all sites:** a monthly check of the current WCAG Recommendation, the WCAG 3 draft and axe-core releases. When one moves, it opens an issue in this repo that @mentions the same people.
 
-It never blocks a deploy: scans run after the deploy finishes. A site can opt into a **gate** that fails the preview check when a code change introduces a new finding of a chosen severity, and make that check required to block merging.
+It never blocks a deploy: scans run after the deploy finishes. Only production is scanned; preview deployments are skipped (they show as skipped runs, because GitHub can't filter deployment events by environment before a run starts).
 
 Automated checks catch only part of WCAG. Keyboard, screen reader and content review still need people.
 
@@ -34,7 +34,6 @@ Automated checks catch only part of WCAG. Keyboard, screen reader and content re
 
    Publishes are debounced: each one starts a 5-minute wait, and a new publish during the wait cancels it and starts the wait again, so a session of edits produces one scan, 5 minutes after the last publish. Set the repo variable `A11Y_PUBLISH_DELAY` (seconds) to change the wait. The waiting run occupies a runner, so a long burst of publishes costs some Actions minutes even though only one scan runs.
 
-4. **Protected previews.** If the Vercel project uses Deployment Protection, add the project's Protection Bypass for Automation secret as the repo secret `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
 ## Org settings (set once in geletkaplus)
 
@@ -56,6 +55,8 @@ A finding we have decided to accept goes in the config, with a reason and a name
 ```
 
 ## Gate
+
+Not used by the site template, which scans production only. A gate only makes sense on preview scans, before merging.
 
 `"gate": { "impacts": ["critical"], "rules": ["button-name", "link-name", "label"] }` fails a run only for **new** findings that match an impact or rule, and only where the workflow passes `gate: true`. Existing debt never fails a run.
 
