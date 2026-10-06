@@ -32,7 +32,7 @@ Automated checks catch only part of WCAG. Keyboard, screen reader and content re
    - Projection: `{"event_type": "content-published", "client_payload": {"id": _id, "type": _type}}`
    - HTTP method: POST. Headers: `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`. The token is a fine-grained GitHub token with **Contents: read and write** on that one repo (that is what the dispatches endpoint requires).
 
-   The workflow waits 90 seconds before scanning so revalidation picks the change up, and cancels older runs if an editor publishes several times in a row.
+   Publishes are debounced: each one starts a 5-minute wait, and a new publish during the wait cancels it and starts the wait again, so a session of edits produces one scan, 5 minutes after the last publish. Set the repo variable `A11Y_PUBLISH_DELAY` (seconds) to change the wait. The waiting run occupies a runner, so a long burst of publishes costs some Actions minutes even though only one scan runs.
 
 4. **Protected previews.** If the Vercel project uses Deployment Protection, add the project's Protection Bypass for Automation secret as the repo secret `VERCEL_AUTOMATION_BYPASS_SECRET`.
 

@@ -1,6 +1,7 @@
 # Copy to .github/workflows/a11y.yml in a site repo, next to an a11y.config.json.
 # Scans production after every production deploy, after content is published
-# (via a Sanity webhook), and weekly; scans previews too. Results go to an
+# (via a Sanity webhook, debounced: one scan once publishing goes quiet for
+# A11Y_PUBLISH_DELAY seconds, default 300), and weekly; scans previews too. Results go to an
 # "Accessibility status" issue in this repo; when something changes, a comment
 # @mentions the people in the A11Y_MENTIONS variable. Never blocks a deploy.
 name: a11y
@@ -26,17 +27,30 @@ permissions:
   actions: read
   issues: write # the scan posts to this repo's "Accessibility status" issue
 
+# Publishes share one group, so each new publish cancels the run still waiting
+# from the previous one: the scan happens once, after the last publish in a
+# session. Every other event gets its own group and is unaffected.
+concurrency:
+  group: ${{ github.event_name == 'repository_dispatch' && 'a11y-content-publish' || format('a11y-run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 jobs:
   decide:
     # Vercel posts several deployment statuses; only scan a finished, successful one.
     if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       target: ${{ steps.d.outputs.target }}
       origin: ${{ steps.d.outputs.origin }}
       trigger: ${{ steps.d.outputs.trigger }}
-      wait: ${{ steps.d.outputs.wait }}
     steps:
+      - name: Wait for publishing to go quiet
+        if: github.event_name == 'repository_dispatch'
+        env:
+          DELAY: ${{ vars.A11Y_PUBLISH_DELAY || '300' }}
+        run: sleep "$DELAY"
+
       - id: d
         env:
           EVENT: ${{ github.event_name }}
@@ -45,16 +59,16 @@ jobs:
           IN_TARGET: ${{ inputs.target }}
           IN_ORIGIN: ${{ inputs.origin }}
         run: |
-          target=production; origin=''; trigger=manual; wait=0
+          target=production; origin=''; trigger=manual
           case "$EVENT" in
             deployment_status)
               trigger=deploy
               if [[ "$ENVIRONMENT" != Production* ]]; then target=preview; origin="$DEPLOY_URL"; fi ;;
-            repository_dispatch) trigger=content; wait=90 ;;
+            repository_dispatch) trigger=content ;;
             schedule) trigger=schedule ;;
             workflow_dispatch) target="$IN_TARGET"; origin="$IN_ORIGIN" ;;
           esac
-          { echo "target=$target"; echo "origin=$origin"; echo "trigger=$trigger"; echo "wait=$wait"; } >> "$GITHUB_OUTPUT"
+          { echo "target=$target"; echo "origin=$origin"; echo "trigger=$trigger"; } >> "$GITHUB_OUTPUT"
 
   scan:
     needs: decide
@@ -67,7 +81,6 @@ jobs:
       target: ${{ needs.decide.outputs.target }}
       origin: ${{ needs.decide.outputs.origin }}
       trigger: ${{ needs.decide.outputs.trigger }}
-      wait-seconds: ${{ fromJSON(needs.decide.outputs.wait) }}
       # Set to true to fail preview checks on new findings matching the config's gate.
       # Make that check required in branch protection to block merging, not deploying.
       gate: false
