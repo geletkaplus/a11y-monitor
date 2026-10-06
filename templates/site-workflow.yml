@@ -1,9 +1,10 @@
 # Copy to .github/workflows/a11y.yml in a site repo, next to an a11y.config.json.
 # Scans production after every production deploy, after content is published
 # (via a Sanity webhook, debounced: one scan once publishing goes quiet for
-# A11Y_PUBLISH_DELAY seconds, default 300), and weekly; scans previews too. Results go to an
-# "Accessibility status" issue in this repo; when something changes, a comment
-# @mentions the people in the A11Y_MENTIONS variable. Never blocks a deploy.
+# A11Y_PUBLISH_DELAY seconds, default 300), and weekly. Preview deployments are
+# not scanned. Results go to an "Accessibility status" issue in this repo; when
+# something changes, a comment @mentions the people in the A11Y_MENTIONS
+# variable. Never blocks a deploy.
 name: a11y
 
 on:
@@ -13,14 +14,6 @@ on:
   schedule:
     - cron: '0 13 * * 1' # Mondays 13:00 UTC
   workflow_dispatch:
-    inputs:
-      target:
-        type: choice
-        options: [production, preview]
-        default: production
-      origin:
-        description: Origin to scan (leave empty for production)
-        default: ''
 
 permissions:
   contents: read
@@ -36,13 +29,15 @@ concurrency:
 
 jobs:
   decide:
-    # Vercel posts several deployment statuses; only scan a finished, successful one.
-    if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
+    # Deploys: only a finished, successful production deployment. Vercel also
+    # reports previews and in-progress states; those runs show as skipped.
+    if: >-
+      github.event_name != 'deployment_status' ||
+      (github.event.deployment_status.state == 'success' &&
+       startsWith(github.event.deployment.environment, 'Production'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      target: ${{ steps.d.outputs.target }}
-      origin: ${{ steps.d.outputs.origin }}
       trigger: ${{ steps.d.outputs.trigger }}
     steps:
       - name: Wait for publishing to go quiet
@@ -54,34 +49,22 @@ jobs:
       - id: d
         env:
           EVENT: ${{ github.event_name }}
-          ENVIRONMENT: ${{ github.event.deployment.environment }}
-          DEPLOY_URL: ${{ github.event.deployment_status.environment_url }}
-          IN_TARGET: ${{ inputs.target }}
-          IN_ORIGIN: ${{ inputs.origin }}
         run: |
-          target=production; origin=''; trigger=manual
           case "$EVENT" in
-            deployment_status)
-              trigger=deploy
-              if [[ "$ENVIRONMENT" != Production* ]]; then target=preview; origin="$DEPLOY_URL"; fi ;;
+            deployment_status) trigger=deploy ;;
             repository_dispatch) trigger=content ;;
             schedule) trigger=schedule ;;
-            workflow_dispatch) target="$IN_TARGET"; origin="$IN_ORIGIN" ;;
+            *) trigger=manual ;;
           esac
-          { echo "target=$target"; echo "origin=$origin"; echo "trigger=$trigger"; } >> "$GITHUB_OUTPUT"
+          echo "trigger=$trigger" >> "$GITHUB_OUTPUT"
 
   scan:
     needs: decide
-    # A burst of content publishes or deploys only needs the latest scan.
+    # A burst of deploys only needs the latest scan.
     concurrency:
-      group: a11y-${{ needs.decide.outputs.target }}-${{ needs.decide.outputs.origin }}
+      group: a11y-production
       cancel-in-progress: true
     uses: geletkaplus/a11y-monitor/.github/workflows/scan.yml@v1
     with:
-      target: ${{ needs.decide.outputs.target }}
-      origin: ${{ needs.decide.outputs.origin }}
       trigger: ${{ needs.decide.outputs.trigger }}
-      # Set to true to fail preview checks on new findings matching the config's gate.
-      # Make that check required in branch protection to block merging, not deploying.
-      gate: false
     secrets: inherit
