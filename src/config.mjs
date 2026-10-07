@@ -1,6 +1,7 @@
 // Loads and validates a site's a11y.config.json. Every field except `site` and
 // `baseUrl` has a default, so a new site can start with a two-line config.
 import fs from 'node:fs';
+import { DEFAULT_VENDORS } from './group.mjs';
 
 const DEFAULTS = {
   // Pages to scan. `sitemap` is a path on the scanned origin; `paths` are added to it.
@@ -19,6 +20,9 @@ const DEFAULTS = {
   // Extra settle time (ms) for pages whose third-party widgets render late,
   // keyed by exact path or `prefix*`. Without it, results flip between runs.
   waits: {},
+  // Extra third-party code to recognise in reports, added to the defaults in
+  // group.mjs: [{ "name": "Vendor", "match": ["class-or-id-fragment"] }].
+  vendors: [],
   // Known, accepted findings. Each needs a reason and a named approver, or it is ignored.
   waivers: [],
   // Report-only by default. A gate only applies where the workflow passes --gate.
@@ -48,6 +52,7 @@ export function loadConfig(file) {
   if (fatal.length) throw new Error(`Invalid ${file}:\n  ${fatal.join('\n  ')}`);
   cfg.warnings = errors.filter((e) => e.startsWith('waivers['));
   cfg.baseUrl = cfg.baseUrl.replace(/\/$/, '');
+  cfg.vendors = [...cfg.vendors, ...DEFAULT_VENDORS];
   return cfg;
 }
 

@@ -5,7 +5,7 @@
 export function shouldNotify(cfg, target, d) {
   const mode = target === 'preview' ? cfg.notify.preview : cfg.notify.default;
   if (mode === 'never') return false;
-  if (mode === 'changes') return !d.hasBaseline || d.added.length > 0 || d.fixed.length > 0;
+  if (mode === 'changes') return !d.hasBaseline || d.added.length > 0 || d.fixed.length > 0 || (d.improved?.length ?? 0) > 0;
   return true;
 }
 

@@ -3,6 +3,7 @@
 Accessibility scanning and reporting for Geletka+ sites.
 
 - **Per site:** after every production deploy, after content is published, and weekly, it scans every page in the sitemap with axe-core (WCAG 2.2 A + AA and best practice) at desktop and mobile widths, checks reflow at 320px and extra h1s, and compares with the last production scan.
+- **How results are counted:** reports lead with **problems**, not raw findings. The same element failing on many pages is one problem; one that fails on 80%+ of pages is marked **site-wide** (usually a shared component or a third-party script). Content that scrolls sideways at 320px is grouped by page template (e.g. `/shop/sauces/*`). Problems in known third-party code are tagged with the vendor and listed separately. A problem that gets better but isn't gone (2 failing elements → 1) is reported as **improved**. Raw per-page, per-width counts stay in the report as detail.
 - **Where results go:** an issue titled **Accessibility status** in the site's repo (label `a11y-status`). Every production scan rewrites its body with the current state. When something is new or fixed, the scan adds a comment that @mentions the people in `A11Y_MENTIONS`, and GitHub emails and notifies them. The full HTML report is attached to each run. No mail service is involved.
 - **Once for all sites:** a monthly check of the current WCAG Recommendation, the WCAG 3 draft and axe-core releases. When one moves, it opens an issue in this repo that @mentions the same people.
 
@@ -21,6 +22,8 @@ Automated checks catch only part of WCAG. Keyboard, screen reader and content re
    Optional fields (defaults in `src/config.mjs`): `sitemap`, `paths`, `exclude` (exact paths or `prefix*`), `maxUrls`, `viewports`, `reflowWidth`, `tags`, `concurrency`, `waits`, `waivers`, `gate`, `notify`.
 
    `notify` sets when a scan comments (and so pings people): `{ "default": "changes", "preview": "changes" }`. Use `"always"` to get a comment after every production scan, or `"never"`.
+
+   `vendors` adds site-specific third-party code to recognise in reports, on top of the defaults in `src/group.mjs` (Klaviyo, Bazaarvoice, Destini, Amazon Buy with Prime, Digital to Retail): `[{ "name": "Acme reviews", "match": ["acme-"] }]`, matched against the failing element's markup.
 
    `waits` gives slow third-party widgets time to finish, e.g. `{ "/find-us": 8000 }` for a store locator. If a page's findings flip between runs, a wait usually fixes it.
 
@@ -80,7 +83,8 @@ Exit codes: 0 ran (findings alone never fail), 1 gate failed, 2 the run could no
 ## Known limits
 
 - Content that fades in through JavaScript tweens (not CSS) can be caught mid-fade and show up as a contrast failure. CSS transitions are forced to their end state before axe runs.
-- Findings are tracked per rule, page and viewport, not per element, because hashed class names change between builds. More failing elements on a page than last time counts as new.
+- Findings are tracked per rule, page and viewport, not per element, because hashed class names change between builds. More failing elements on a page than last time counts as new; fewer counts as improved.
+- Vendor tagging only sees the failing element and, for extra h1s, its ancestors. A problem a vendor causes in our own markup (e.g. a widget that adds a second `<main>`, making ours fail `landmark-no-duplicate-main`) still shows under our code.
 - Third-party widgets (reviews, store locators, loyalty, checkout) are scanned where they render in the page, but not inside cross-origin iframes.
 
 ## Releasing
