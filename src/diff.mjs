@@ -19,21 +19,24 @@ export function flatten(pages, cfg) {
 // `scanned` is the set of "path|viewport" pairs this run actually loaded. A page
 // that was not scanned (or failed to load) cannot count as fixed.
 export function diff(currentRows, baselineRows, scanned) {
-  if (!baselineRows) return { hasBaseline: false, added: currentRows.filter((r) => !r.waived), fixed: [], ongoing: [] };
+  if (!baselineRows) return { hasBaseline: false, added: currentRows.filter((r) => !r.waived), fixed: [], improved: [], ongoing: [] };
   const wasScanned = (r) => !scanned || scanned.has(`${r.path}|${r.viewport}`);
   const before = new Map(baselineRows.filter((r) => !r.waived).map((r) => [r.key, r]));
   const now = currentRows.filter((r) => !r.waived);
   const added = [];
+  const improved = [];
   const ongoing = [];
   for (const r of now) {
     const prev = before.get(r.key);
-    // More failing elements on a page than last time counts as new.
+    // More failing elements on a page than last time counts as new; fewer
+    // (but not zero) counts as improved.
     if (!prev || r.count > prev.count) added.push({ ...r, previousCount: prev?.count ?? 0 });
+    else if (r.count < prev.count) improved.push({ ...r, previousCount: prev.count });
     else ongoing.push(r);
   }
   const nowKeys = new Set(now.map((r) => r.key));
   const fixed = [...before.values()].filter((r) => !nowKeys.has(r.key) && wasScanned(r));
-  return { hasBaseline: true, added, fixed, ongoing };
+  return { hasBaseline: true, added, fixed, improved, ongoing };
 }
 
 export function summarize(rows) {
@@ -65,7 +68,7 @@ export function appendHistory(baselineHistory, entry, keep = 104) {
 // last one by chance. Pages whose result changed are scanned twice; a finding
 // counts as new only if both scans saw it, and as fixed only if neither did.
 export function changedPages(d) {
-  return new Set([...d.added, ...d.fixed].map((r) => `${r.path}|${r.viewport}`));
+  return new Set([...d.added, ...d.fixed, ...d.improved].map((r) => `${r.path}|${r.viewport}`));
 }
 
 export function confirmPages(firstPages, secondPages, baselineRows) {

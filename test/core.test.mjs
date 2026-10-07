@@ -8,6 +8,7 @@ import { pathsFromSitemapXml } from '../src/urls.mjs';
 import { flatten, diff, summarize, gateFailures, appendHistory, changedPages, confirmPages } from '../src/diff.mjs';
 import { shouldNotify, mentions } from '../src/notify.mjs';
 import { renderIssueBody, renderComment } from '../src/report.mjs';
+import { templateOf, problemKey, vendorFor, groupProblems, scopeLabel, problemSummary } from '../src/group.mjs';
 import { parseW3cTr, compare } from '../src/standards.mjs';
 
 function writeConfig(obj) {
@@ -108,16 +109,24 @@ test('notify: comments only on change by default; mentions are normalised', () =
   assert.equal(mentions(undefined), '');
 });
 
-test('markdown: comment carries mentions, new findings and escapes pipes', () => {
+const problemsFor = (d, totalPages, viewports = ['desktop', 'mobile']) => {
+  const o = { totalPages, viewports };
+  const p = { open: groupProblems([...d.added, ...d.improved, ...d.ongoing], o), added: groupProblems(d.added, o), fixed: groupProblems(d.fixed, o), improved: groupProblems(d.improved, o) };
+  p.summary = problemSummary(p.open);
+  return p;
+};
+const run = { site: 'x', target: 'production', trigger: 'deploy', origin: 'https://e.com', date: '2026-10-05T12:00:00Z', axeVersion: '4.13.0', runUrl: 'https://run' };
+
+test('markdown: comment carries mentions and new problems, and escapes pipes', () => {
   const cfg = { waivers: [] };
-  const rows = flatten([page('/a|b', 'mobile', [{ ...finding('button-name', 'critical', 2), help: 'Buttons need | names', helpUrl: 'https://x' }])], cfg);
+  const rows = flatten([page('/a|b', 'mobile', [{ ...finding('button-name', 'critical', 2), help: 'Buttons need | names', helpUrl: 'https://x', nodes: [{ target: 'button', html: '<button class="cta">' }] }])], cfg);
   const d = diff(rows, [], new Set(['/a|b|mobile']));
-  const run = { target: 'production', trigger: 'deploy', origin: 'https://e.com', date: '2026-10-05T12:00:00Z', axeVersion: '4.13.0', runUrl: 'https://run' };
-  const c = renderComment({ run, summary: summarize(rows), d }, '@jon @doug');
+  const problems = problemsFor(d, 1);
+  const c = renderComment({ run, summary: summarize(rows), d, problems }, '@jon @doug');
   assert.match(c, /^@jon @doug/);
-  assert.match(c, /1 new, 0 fixed/);
+  assert.match(c, /1 new, 0 fixed, 0 improved/);
   assert.match(c, /Buttons need \\\| names/);
-  assert.match(renderIssueBody({ run, summary: summarize(rows), d }), /button-name/);
+  assert.match(renderIssueBody({ run, summary: summarize(rows), problems }), /button-name/);
 });
 
 test('standards: parses a W3C TR status line', () => {
@@ -153,4 +162,75 @@ test('waits: exact path and prefix override the default settle time', () => {
   assert.equal(settleMs(cfg, '/find-us', 1200), 8000);
   assert.equal(settleMs(cfg, '/shop/sauces', 1200), 3000);
   assert.equal(settleMs(cfg, '/about', 1200), 1200);
+});
+
+const node = (html, extra = {}) => ({ target: 'x', html, ...extra });
+
+test('group: templateOf', () => {
+  assert.equal(templateOf('/shop/sauces/marinara'), '/shop/sauces/*');
+  assert.equal(templateOf('/about'), '/about');
+  assert.equal(templateOf('/'), '/');
+});
+
+test('group: same component on many pages and widths is one problem; hash classes ignored', () => {
+  const cfg = { waivers: [] };
+  const mk = (p, vp, cls) => page(p, vp, [{ ...finding('image-redundant-alt', 'minor'), nodes: [node(`<img alt="t" class="object-cover ${cls}">`)] }]);
+  const rows = flatten([mk('/a', 'desktop', 'css-1a2b3c'), mk('/a', 'mobile', 'css-9f8e7d'), mk('/b', 'desktop', 'css-000aaa')], cfg);
+  const g = groupProblems(rows, { totalPages: 10, viewports: ['desktop', 'mobile'] });
+  assert.equal(g.length, 1);
+  assert.deepEqual(g[0].pages, ['/a', '/b']);
+  assert.equal(g[0].views, 3);
+  assert.equal(g[0].widths, 'all widths');
+  assert.equal(scopeLabel(g[0]), '2 pages');
+});
+
+test('group: reflow groups by template; one-off pages stay separate', () => {
+  const cfg = { waivers: [] };
+  const rf = (p, w) => page(p, 'mobile', [{ ...finding('gp-reflow', 'serious'), help: `Horizontal scroll (page is ${w}px wide)`, nodes: [node('', { target: `div right=${w}` })] }]);
+  const g = groupProblems(flatten([rf('/shop/sauces/a', 332), rf('/shop/sauces/b', 340), rf('/privacy-policy', 354)], cfg), { totalPages: 50, viewports: ['desktop', 'mobile'] });
+  assert.equal(g.length, 2);
+  const tpl = g.find((p) => p.template === '/shop/sauces/*');
+  assert.equal(scopeLabel(tpl), '/shop/sauces/* pages (2)');
+  assert.equal(tpl.widths, 'mobile only');
+});
+
+test('group: site-wide at 80% of pages, and vendor tagged from h1 context', () => {
+  const cfg = { waivers: [] };
+  const h1 = (p) => page(p, 'desktop', [{ ...finding('gp-multiple-h1', 'moderate', 2), nodes: [node('Carbone', { context: 'nav' }), node('SUBSCRIBE', { context: 'div.klaviyo-form-abc' })] }]);
+  const pages = Array.from({ length: 9 }, (_, i) => h1(`/p${i}`));
+  const g = groupProblems(flatten(pages, cfg), { totalPages: 10, viewports: ['desktop'] });
+  assert.equal(g.length, 1);
+  assert.equal(g[0].siteWide, true);
+  assert.equal(g[0].vendor, 'Klaviyo');
+  assert.equal(scopeLabel(g[0]), 'site-wide (9 pages)');
+  assert.equal(problemSummary(g).vendorProblems, 1);
+});
+
+test('group: vendorFor matches markup and site-specific vendors', () => {
+  assert.equal(vendorFor({ nodes: [node('<button class="bv_main_container_row_flex">')] }), 'Bazaarvoice');
+  assert.equal(vendorFor({ nodes: [node('<div class="ours">')] }), null);
+  assert.equal(vendorFor({ nodes: [node('<div class="acme-widget">')] }, [{ name: 'Acme', match: ['acme-'] }]), 'Acme');
+});
+
+test('diff: fewer failing elements than before is improved, and notifies', () => {
+  const cfg = { waivers: [] };
+  const before = flatten([page('/t', 'desktop', [finding('heading-order', 'moderate', 2)])], cfg);
+  const now = flatten([page('/t', 'desktop', [finding('heading-order', 'moderate', 1)])], cfg);
+  const d = diff(now, before, new Set(['/t|desktop']));
+  assert.equal(d.improved.length, 1);
+  assert.equal(d.improved[0].previousCount, 2);
+  assert.equal(d.added.length + d.fixed.length + d.ongoing.length, 0);
+  assert.equal(shouldNotify({ notify: { default: 'changes' } }, 'production', d), true);
+  const c = renderComment({ run, summary: summarize(now), d, problems: problemsFor(d, 1) });
+  assert.match(c, /### Improved/);
+  assert.match(c, /2 → 1 failing elements/);
+});
+
+test('group: a vendor failing one rule on desktop and mobile with different generated classes is one problem', () => {
+  const cfg = { waivers: [] };
+  const lm = (vp, cls) => page('/find-us', vp, [{ ...finding('landmark-main-is-top-level', 'moderate'), nodes: [node(`<main class="${cls}">`)] }]);
+  const g = groupProblems(flatten([lm('desktop', 'destini-css-0'), lm('mobile', 'destini-css-1s7b6ww')], cfg), { totalPages: 5, viewports: ['desktop', 'mobile'] });
+  assert.equal(g.length, 1);
+  assert.equal(g[0].vendor, 'Destini');
+  assert.equal(g[0].widths, 'all widths');
 });

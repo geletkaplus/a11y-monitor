@@ -73,13 +73,22 @@ async function scanPage(browser, origin, path, vp, cfg, headers) {
       [...document.querySelectorAll('h1')]
         // checkVisibility() also catches an h1 hidden by a display:none ancestor (e.g. a desktop-only nav).
         .filter((h) => h.checkVisibility({ visibilityProperty: true }) && !h.closest('[aria-hidden="true"]'))
-        .map((h) => (h.innerText || h.querySelector('img')?.alt || '').trim().slice(0, 60)),
+        .map((h) => {
+          // Ancestor ids/classes, so a report can tell a site's own h1 from one a
+          // third-party script injected (e.g. a signup form in the footer).
+          const context = [];
+          for (let a = h.parentElement; a && a !== document.body && context.length < 6; a = a.parentElement) {
+            const cls = typeof a.className === 'string' ? a.className.trim().split(/\s+/).slice(0, 3).join('.') : '';
+            if (a.id || cls) context.push(a.tagName.toLowerCase() + (a.id ? '#' + a.id : '') + (cls ? '.' + cls : ''));
+          }
+          return { text: (h.innerText || h.querySelector('img')?.alt || '').trim().slice(0, 60), context: context.join(' < ') };
+        }),
     );
     if (h1s.length > 1) {
       result.findings.push({
         rule: 'gp-multiple-h1', impact: 'moderate', help: 'Page exposes more than one h1', wcag: ['1.3.1'],
         helpUrl: 'https://www.w3.org/WAI/tutorials/page-structure/headings/',
-        nodes: h1s.map((t) => ({ target: 'h1', html: t, why: '' })), count: h1s.length,
+        nodes: h1s.map((h) => ({ target: 'h1', html: h.text, context: h.context, why: '' })), count: h1s.length,
       });
     }
 
@@ -101,9 +110,9 @@ async function scanPage(browser, origin, path, vp, cfg, headers) {
       });
       if (overflow.scrollWidth > overflow.clientWidth) {
         result.findings.push({
-          rule: 'gp-reflow', impact: 'serious', help: `Horizontal scroll at ${cfg.reflowWidth}px (page is ${overflow.scrollWidth}px wide)`, wcag: ['1.4.10'],
+          rule: 'gp-reflow', impact: 'serious', help: `Content scrolls sideways at ${cfg.reflowWidth}px wide`, wcag: ['1.4.10'],
           helpUrl: 'https://www.w3.org/WAI/WCAG22/Understanding/reflow.html',
-          nodes: overflow.sample.map((s) => ({ target: s, html: '', why: '' })), count: 1,
+          nodes: overflow.sample.map((s) => ({ target: s, html: '', why: `page is ${overflow.scrollWidth}px wide` })), count: 1,
         });
       }
     }

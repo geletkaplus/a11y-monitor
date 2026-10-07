@@ -16,6 +16,7 @@ import { loadConfig } from './config.mjs';
 import { discoverPaths } from './urls.mjs';
 import { runScan } from './scan.mjs';
 import { flatten, diff, summarize, gateFailures, appendHistory, changedPages, confirmPages } from './diff.mjs';
+import { groupProblems, problemSummary } from './group.mjs';
 import { renderReport, subjectLine, renderIssueBody, renderComment } from './report.mjs';
 import { shouldNotify, mentions } from './notify.mjs';
 import { checkStandards, renderStandards } from './standards.mjs';
@@ -72,6 +73,14 @@ async function scan() {
   const rows = flatten(pages, cfg);
   const d = diff(rows, baseline?.rows, scanned);
   const summary = summarize(rows);
+  const groupOpts = { totalPages: paths.length, viewports: cfg.viewports.map((v) => v.name), vendors: cfg.vendors };
+  const problems = {
+    open: groupProblems([...d.added, ...d.improved, ...d.ongoing], groupOpts),
+    added: groupProblems(d.added, groupOpts),
+    fixed: groupProblems(d.fixed, groupOpts),
+    improved: groupProblems(d.improved, groupOpts),
+  };
+  problems.summary = problemSummary(problems.open);
   const run = {
     site: cfg.site, origin, target: args.target, trigger: args.trigger, date: new Date().toISOString(),
     viewports: cfg.viewports.map((v) => v.name), axeVersion: AXE_VERSION, runUrl: args['run-url'] || null,
@@ -80,20 +89,20 @@ async function scan() {
 
   // Only production runs move the trend line; previews compare against it.
   const history = args.target === 'production'
-    ? appendHistory(baseline?.history, { date: run.date, trigger: run.trigger, pages: paths.length, total: summary.total, byImpact: summary.byImpact })
+    ? appendHistory(baseline?.history, { date: run.date, trigger: run.trigger, pages: paths.length, total: summary.total, problems: problems.summary.problems, byImpact: summary.byImpact })
     : baseline?.history || [];
 
   fs.mkdirSync(args.out, { recursive: true });
-  const html = renderReport({ run, summary, d, rows, pages, history, warnings: cfg.warnings });
+  const html = renderReport({ run, summary, d, rows, pages, history, problems, warnings: cfg.warnings });
   fs.writeFileSync(path.join(args.out, 'results.json'), JSON.stringify({ run, summary, rows, pages, history }, null, 1));
   fs.writeFileSync(path.join(args.out, 'report.html'), html);
-  const subject = subjectLine(run, d, summary);
+  const subject = subjectLine(run, d, problems);
   console.log(`\n${subject}\nReport: ${path.join(args.out, 'report.html')}`);
 
   const notify = shouldNotify(cfg, args.target, d);
-  fs.writeFileSync(path.join(args.out, 'issue.md'), renderIssueBody({ run, summary, d }));
-  fs.writeFileSync(path.join(args.out, 'comment.md'), renderComment({ run, summary, d }, mentions(process.env.A11Y_MENTIONS)));
-  fs.writeFileSync(path.join(args.out, 'notify.json'), JSON.stringify({ comment: notify, subject, target: args.target, added: d.added.length, fixed: d.fixed.length, open: summary.total }));
+  fs.writeFileSync(path.join(args.out, 'issue.md'), renderIssueBody({ run, summary, d, problems }));
+  fs.writeFileSync(path.join(args.out, 'comment.md'), renderComment({ run, summary, d, problems }, mentions(process.env.A11Y_MENTIONS)));
+  fs.writeFileSync(path.join(args.out, 'notify.json'), JSON.stringify({ comment: notify, subject, target: args.target, added: problems.added.length, fixed: problems.fixed.length, improved: problems.improved.length, problems: problems.summary.problems, rawOpen: summary.total }));
   if (run.gateFailures.length) {
     console.error(`Gate: ${run.gateFailures.length} new finding(s) match ${JSON.stringify(cfg.gate)}`);
     return 1;
