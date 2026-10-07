@@ -13,36 +13,13 @@ Automated checks catch only part of WCAG. Keyboard, screen reader and content re
 
 ## Adding a site
 
-1. Add `a11y.config.json` at the repo root:
-
-   ```json
-   { "site": "carbone", "baseUrl": "https://www.carbonefinefood.com" }
-   ```
-
-   Optional fields (defaults in `src/config.mjs`): `sitemap`, `paths`, `exclude` (exact paths or `prefix*`), `maxUrls`, `viewports`, `reflowWidth`, `tags`, `concurrency`, `waits`, `waivers`, `gate`, `notify`.
-
-   `notify` sets when a scan comments (and so pings people): `{ "default": "changes", "preview": "changes" }`. Use `"always"` to get a comment after every production scan, or `"never"`.
-
-   `vendors` adds site-specific third-party code to recognise in reports, on top of the defaults in `src/group.mjs` (Klaviyo, Bazaarvoice, Destini, Amazon Buy with Prime, Digital to Retail): `[{ "name": "Acme reviews", "match": ["acme-"] }]`, matched against the failing element's markup.
-
-   `waits` gives slow third-party widgets time to finish, e.g. `{ "/find-us": 8000 }` for a store locator. If a page's findings flip between runs, a wait usually fixes it.
-
-2. Copy `templates/site-workflow.yml` to `.github/workflows/a11y.yml`.
-
-3. **Content publishes** (Sanity sites). Most of our sites refresh content on a timer rather than rebuilding, so a publish does not create a deploy. Add a Sanity webhook (sanity.io/manage → API → Webhooks) that tells GitHub to scan:
-   - URL: `https://api.github.com/repos/geletkaplus/<repo>/dispatches`
-   - Trigger on: create, update, delete. Filter: `!(_id in path("drafts.**"))`
-   - Projection: `{"event_type": "content-published", "client_payload": {"id": _id, "type": _type}}`
-   - HTTP method: POST. Headers: `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`. The token is a fine-grained GitHub token with **Contents: read and write** on that one repo (that is what the dispatches endpoint requires).
-
-   Publishes are debounced: each one starts a 5-minute wait, and a new publish during the wait cancels it and starts the wait again, so a session of edits produces one scan, 5 minutes after the last publish. Set the repo variable `A11Y_PUBLISH_DELAY` (seconds) to change the wait. The waiting run occupies a runner, so a long burst of publishes costs some Actions minutes even though only one scan runs.
-
+Follow **[docs/ADDING-A-SITE.md](docs/ADDING-A-SITE.md)**: the decisions to make, the config file and workflow, notifications, scans on content publish, a checklist, and troubleshooting. About 30 minutes per site.
 
 ## Org settings (set once in geletkaplus)
 
 | Name | Kind | What |
 |---|---|---|
-| `A11Y_MENTIONS` | Variable | GitHub usernames to notify, space- or comma-separated, e.g. `jscarpelli3`. Each person must be able to see the site's repo, and gets GitHub's normal email and app notifications for mentions. |
+| `A11Y_MENTIONS` | Variable (org, or per repo if you're not an org admin) | GitHub usernames to notify, space- or comma-separated, e.g. `jscarpelli3`. Each person must be able to see the site's repo, and gets GitHub's normal email and app notifications for mentions. |
 | `A11Y_MONITOR_READ_TOKEN` | Secret | Read access to this repo, while it is private. Not needed if the repo is public or the org allows workflow access to it (Settings → Actions → Access). |
 
 Without `A11Y_MENTIONS` the status issue is still updated; nobody is pinged.
